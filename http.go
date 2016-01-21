@@ -1,12 +1,13 @@
 package main
 
 import (
+	"log"
 	"net/http"
 	"html/template"
 	"regexp"
-	"os"
-	"strings"
 	"pages"
+	"gopkg.in/mgo.v2"
+	"gopkg.in/mgo.v2/bson"
 )
 
 var validPath = regexp.MustCompile("^/(edit|save|view)/([a-zA-Z0-9]+)$")
@@ -16,6 +17,8 @@ var templates = template.Must(template.ParseFiles("src/templates/notExist.html",
 	"src/templates/edit.html",
 	"src/templates/front.html",
 	"src/templates/404.html"))
+
+var mongoURL = "mongodb://127.0.0.1:27017"
 
 func main() {
 	http.HandleFunc("/", indexHandler)
@@ -37,19 +40,21 @@ func makeHandler(f func(http.ResponseWriter, *http.Request, string)) http.Handle
 }
 
 func indexHandler(res http.ResponseWriter, req *http.Request) {
-	dir, err := os.Open("pages")
-	if err != nil {
-		http.Error(res, err.Error(), http.StatusInternalServerError)
-		return
+	mongo, merr := mgo.Dial(mongoURL)
+	if merr != nil {
+		panic(merr)
 	}
-	names, rerr := dir.Readdirnames(-1)
-	if rerr != nil {
-		http.Error(res, rerr.Error(), http.StatusInternalServerError)
-		return
+	defer mongo.Close()
+
+	var result []pages.Page
+	collection := mongo.DB("gowebtest").C("pages")
+	qerr := collection.Find(bson.M{}).All(&result)
+	if qerr != nil {
+		log.Fatal(qerr)
 	}
-	parsedNames := names
-	for i, name := range names {
-		parsedNames[i] = strings.Split(name, ".")[0]
+	names := make([]string, len(result))
+	for i, page := range result {
+		names[i] = page.Title
 	}
 	terr := templates.ExecuteTemplate(res, "front.html", struct{Names []string}{names})
 	if terr != nil {
@@ -57,27 +62,55 @@ func indexHandler(res http.ResponseWriter, req *http.Request) {
 	}
 }
 
+
 func viewHandler(res http.ResponseWriter, req *http.Request, title string) {
-	p, err := pages.LoadPage(title)
+	mongo, merr := mgo.Dial(mongoURL)
+	if merr != nil {
+		panic(merr)
+	}
+	defer mongo.Close()
+
+	page := pages.Page{}
+	collection := mongo.DB("gowebtest").C("pages")
+
+	err := collection.Find(bson.M{"title": title}).One(&page)
 	if err != nil {
 		renderTemplate(res, "notExist", &pages.Page{Title: title})
 	} else {
-		renderTemplate(res, "view", p)
+		renderTemplate(res, "view", &page)
 	}
 }
 
 func editHandler(res http.ResponseWriter, req *http.Request, title string) {
-	p, err := pages.LoadPage(title)
-	if err != nil {
-		p = &pages.Page{Title: title}
+	mongo, merr := mgo.Dial(mongoURL)
+	if merr != nil {
+		panic(merr)
 	}
-	renderTemplate(res, "edit", p)
+	defer mongo.Close()
+
+	page := pages.Page{}
+	collection := mongo.DB("gowebtest").C("pages")
+
+	err := collection.Find(bson.M{"title": title}).One(&page)
+	if err != nil {
+		page = pages.Page{Title: title}
+	}
+	renderTemplate(res, "edit", &page)
 }
 
 func saveHandler(res http.ResponseWriter, req *http.Request, title string) {
+	mongo, merr := mgo.Dial(mongoURL)
+	if merr != nil {
+		panic(merr)
+	}
+	defer mongo.Close()
+
 	body := req.FormValue("body")
 	p := &pages.Page{Title: title, Body: []byte(body)}
-	err := p.Save()
+
+	collection := mongo.DB("gowebtest").C("pages")
+
+	_, err := collection.Upsert(bson.M{"title": p.Title}, p)
 	if err != nil {
 		http.Error(res, err.Error(), http.StatusInternalServerError)
 		return
