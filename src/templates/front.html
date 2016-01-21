@@ -1,0 +1,9 @@
+<h1>Welcome to Post Generator</h1>
+<div>
+	<h3>Existing posts</h3>
+	<ul>
+		{{range .Names}}
+			<li><a href="/view/{{.}}">{{.}}</a></li>
+		{{end}}
+	</ul>
+</div>
